@@ -1,0 +1,94 @@
+name: Backend CD Workflow
+
+'on':
+  workflow_dispatch: null
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  Linting:
+    runs-on: ubuntu-latest
+    environment: Devlopmnet Environment
+
+    steps:
+      - name: Checkout the Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Rependencies
+        working-directory: starter/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install pipenv
+          pip install flake8
+
+      - name: Change Directory and run Lint
+        run: cd starter/backend && pipenv run lint
+
+  Test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        working-directory: starter/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install pipenv
+          pip install flake8
+
+      - name: Test
+        run: cd starter/backend && pipenv install pytest && pipenv run test
+
+  Build:
+    needs:
+      - Linting
+      - Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push docker image to Amazon ECR
+        working-directory: starter/backend
+        env:
+          IMAGE_TAG: latest
+          REPO_NAME: backend
+        run: |
+          docker build --tag 802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG .
+          docker push 802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+      - name: Update Kubeconfig
+        run: aws eks update-kubeconfig --name cluster --region us-east-1
+
+      - name: Deploy Image in Amazon ECR to Amazon EKS
+        working-directory: starter/backend/k8s
+        env:
+          IMAGE_TAG: latest
+          REPO_NAME: backend
+        run: |
+          kustomize edit set image backend=802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+          kustomize build | kubectl apply -f -

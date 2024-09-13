@@ -1,0 +1,100 @@
+name: Frontend CD Workflow
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  Linting:
+    runs-on: ubuntu-latest
+    environment: Devlopmnet Environment
+
+    steps:
+    - name: Checkout the Repository
+      uses: actions/checkout@v4
+
+    - name: Use Node.js 18
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+        cache-dependency-path: starter/frontend/package-lock.json
+
+    - name: Install Dependencies
+      working-directory: starter/frontend
+      run: npm ci
+
+    - name: Change Directory and run Lint
+      run: cd starter/frontend && npm run lint
+
+  Test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the Repository
+      uses: actions/checkout@v4
+
+    - name: Use Node.js 18
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+        cache-dependency-path: starter/frontend/package-lock.json
+        
+    - name: Install Dependencies
+      working-directory: starter/frontend
+      run: npm ci
+  
+    - name: Test
+      run: cd starter/frontend && npm run test
+
+  Build:
+    needs: [Linting, Test]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout the Repository
+      uses: actions/checkout@v4
+    
+    - name: Use Node.js 18
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+        cache-dependency-path: starter/frontend/package-lock.json
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+  
+    - name: Login to Amazon 
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and push docker image to Amazon ECR
+      working-directory: starter/frontend
+      env:
+        IMAGE_TAG: latest
+        REPO_NAME: frontend
+        REACT_APP_MOVIE_API: ${{ vars.REACT_APP_MOVIE_API }}
+      run: |
+        docker build --build-arg=REACT_APP_MOVIE_API_URL=http://$REACT_APP_MOVIE_API:5000 --tag 802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG .
+        docker push 802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+
+    - name: Configure Kubeconfig
+      run:
+       aws eks update-kubeconfig --name cluster --region us-east-1
+
+    - name: Deploy Image in Amazon ECR to Amazon EKS
+      working-directory: starter/frontend/k8s
+      env:
+        IMAGE_TAG: latest
+        REPO_NAME: frontend
+      run: |
+          kustomize edit set image frontend=802211717183.dkr.ecr.us-east-1.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+          kustomize build | kubectl apply -f -
